@@ -1,6 +1,7 @@
 import pygame
 import random
 import numpy as np
+import time
 
 # Tetris game settings
 SCREEN_WIDTH = 200  # Reduced screen width
@@ -70,6 +71,9 @@ class Tetromino:
     def move_right(self):
         self.x += BLOCK_SIZE
 
+    def drop_to_bottom(self, game):
+        while not game.check_collision(self, y_offset=1):
+            self.move_down()
 
 class Tetris:
     def __init__(self):
@@ -114,8 +118,8 @@ class Tetris:
         for row in range(len(piece.shape)):
             for col in range(len(piece.shape[row])):
                 if piece.shape[row][col]:
-                    new_x = piece.x + col + x_offset
-                    new_y = piece.y + row + y_offset
+                    new_x = piece.x // BLOCK_SIZE + col + x_offset
+                    new_y = piece.y // BLOCK_SIZE + row + y_offset
                     if (new_x < 0 or new_x >= GRID_WIDTH or
                             new_y >= GRID_HEIGHT or
                             (new_y >= 0 and self.grid[new_y][new_x])):
@@ -126,16 +130,22 @@ class Tetris:
         for row in range(len(self.current_piece.shape)):
             for col in range(len(self.current_piece.shape[row])):
                 if self.current_piece.shape[row][col]:
-                    x = self.current_piece.x + col
-                    y = self.current_piece.y + row
+                    x = self.current_piece.x // BLOCK_SIZE + col
+                    y = self.current_piece.y // BLOCK_SIZE + row
                     if y >= 0 and y < GRID_HEIGHT and x >= 0 and x < GRID_WIDTH:
                         self.grid[y][x] = self.current_piece.color
+                        if y < 1:  # Check if the piece is at the top of the grid
+                            self.game_over = True  # Trigger game over if at the top
 
         self.clear_lines()
-        self.current_piece = self.next_piece
-        self.next_piece = self.get_new_piece()
-        if self.check_collision(self.current_piece):
-            self.game_over = True
+        self.update_screen()  # Update screen after locking piece
+        pygame.display.flip()  # Ensure the screen is updated
+        time.sleep(0.5)  # Delay to observe the locked piece
+
+        if not self.game_over:
+            self.current_piece = self.get_new_piece()
+            if self.check_collision(self.current_piece):
+                self.game_over = True
 
     def clear_lines(self):
         lines_to_clear = []
@@ -153,10 +163,30 @@ class Tetris:
         heights = [0] * GRID_WIDTH
         for col in range(GRID_WIDTH):
             for row in range(GRID_HEIGHT):
-                if self.grid[row][col]:
+                if self.grid[row][col]:  # Fixing the unmatched parenthesis
                     heights[col] = GRID_HEIGHT - row
                     break
         return np.array(heights)
+
+    def update_screen(self):
+        self.screen.fill(BLACK)
+        self.draw_grid()
+        self.current_piece.draw(self.screen)
+        for y in range(GRID_HEIGHT):
+            for x in range(GRID_WIDTH):
+                if self.grid[y][x] != 0:
+                    pygame.draw.rect(self.screen, self.grid[y][x],
+                                     (x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE))
+        pygame.display.flip()
+
+    def reset(self):
+        self.grid = [[0 for _ in range(GRID_WIDTH)] for _ in range(GRID_HEIGHT)]
+        self.current_piece = self.get_new_piece()
+        self.next_piece = self.get_new_piece()
+        self.game_over = False
+        self.score = 0
+        self.lines_cleared = 0
+        self.move_count = 0
 
     def run(self, max_moves=MAX_MOVES_PER_AGENT):
         while not self.game_over and self.move_count < max_moves:
@@ -183,15 +213,13 @@ class Tetris:
             else:
                 self.lock_piece()
 
-            self.screen.fill(BLACK)
-            self.draw_grid()
-            self.current_piece.draw(self.screen)
-            self.draw_next_piece()
+            self.update_screen()
 
             pygame.display.flip()
-            self.clock.tick(10)  # Increased speed to 10 FPS
+            self.clock.tick(2)  # To see the status of each block
 
-        pygame.quit()
+        # Game over or moves exhausted
+        return self.score
 
 
 # --- Genetic Algorithm ---
@@ -207,23 +235,37 @@ class Agent:
     def get_move(self, game):
         best_move = None
         min_height = float('inf')
-        for _ in range(4):
-            for x in range(GRID_WIDTH - len(game.current_piece.shape[0]) + 1):
-                temp_piece = Tetromino(x, game.current_piece.y,
-                                       game.current_piece.shape,
-                                       game.current_piece.color)
-                while not game.check_collision(temp_piece, y_offset=1):
-                    temp_piece.move_down()
+        best_rotation = 0
+        original_x = game.current_piece.x
+        original_shape = game.current_piece.shape
 
+        for rotation in range(4):
+            game.current_piece.shape = list(zip(*original_shape[::-1]))  # Rotate shape
+            for x in range(GRID_WIDTH - len(game.current_piece.shape[0]) + 1):
+                game.current_piece.x = x * BLOCK_SIZE
+                temp_piece = Tetromino(x * BLOCK_SIZE, game.current_piece.y, game.current_piece.shape, game.current_piece.color)
+                temp_piece.drop_to_bottom(game)  # Drop to bottom
+
+                if game.check_collision(temp_piece, y_offset=1):
+                    continue
+
+                # Evaluate the placement
                 state = game.get_state()
                 height = np.sum(state * self.chromosome)
                 if height < min_height:
                     min_height = height
-                    best_move = (game.current_piece.rotation, x)
+                    best_move = (rotation, x)
+                    best_rotation = rotation
 
-            game.current_piece.rotate()
+            game.current_piece.x = original_x
+            game.current_piece.shape = original_shape
 
-        return best_move
+        # Return a default move if no valid move is found
+        if best_move is None:
+            best_move = (0, 0)  # Default to no rotation and first column
+            best_rotation = 0
+
+        return best_move, best_rotation
 
 
 def create_initial_population():
@@ -256,9 +298,27 @@ def mutation(agent):
 
 def calculate_fitness(agent):
     game = Tetris()
-    move = agent.get_move(game)
-    game.run(max_moves=MAX_MOVES_PER_AGENT)  # Limit the number of moves
-    return game.score
+
+    # Run the game for the current agent
+    while not game.game_over and game.move_count < MAX_MOVES_PER_AGENT:
+        move, rotation = agent.get_move(game)
+
+        # Apply the move
+        game.current_piece.x = move[1] * BLOCK_SIZE
+        for _ in range(rotation):
+            game.current_piece.rotate()
+
+        # Drop the piece to the bottom and lock it
+        game.current_piece.drop_to_bottom(game)
+        game.lock_piece()
+
+        # Update game state
+        game.update_screen()
+
+    score = game.score
+    pygame.quit()
+
+    return score
 
 
 def run_genetic_algorithm():
