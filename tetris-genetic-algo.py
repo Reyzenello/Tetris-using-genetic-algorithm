@@ -3,9 +3,9 @@ import random
 import numpy as np
 
 # Tetris game settings
-SCREEN_WIDTH = 300
-SCREEN_HEIGHT = 600
-BLOCK_SIZE = 30
+SCREEN_WIDTH = 200  # Reduced screen width
+SCREEN_HEIGHT = 400  # Reduced screen height
+BLOCK_SIZE = 20  # Reduced block size
 GRID_WIDTH = SCREEN_WIDTH // BLOCK_SIZE
 GRID_HEIGHT = SCREEN_HEIGHT // BLOCK_SIZE
 
@@ -20,7 +20,7 @@ COLORS = [
     (255, 255, 0),  # Yellow
     (255, 0, 255),  # Magenta
     (0, 255, 255),  # Cyan
-    (128, 0, 128)  # Purple
+    (128, 0, 128)   # Purple
 ]
 
 # Tetromino shapes
@@ -35,10 +35,10 @@ TETROMINOES = [
 ]
 
 # Genetic Algorithm parameters
-POPULATION_SIZE = 50
-MUTATION_RATE = 0.1
-NUM_GENERATIONS = 100
-
+POPULATION_SIZE = 10  # Further reduced population size
+MUTATION_RATE = 0.05  # Lowered mutation rate
+NUM_GENERATIONS = 20  # Reduced number of generations
+MAX_MOVES_PER_AGENT = 50  # Limit the number of moves per agent
 
 class Tetromino:
     def __init__(self, x, y, shape, color):
@@ -84,6 +84,7 @@ class Tetris:
         self.game_over = False
         self.score = 0
         self.lines_cleared = 0
+        self.move_count = 0
 
     def get_new_piece(self):
         shape = random.choice(TETROMINOES)
@@ -99,8 +100,8 @@ class Tetris:
                 pygame.draw.rect(self.screen, GRAY, rect, 1)
 
     def draw_next_piece(self):
-        x_offset = SCREEN_WIDTH - 150
-        y_offset = 100
+        x_offset = SCREEN_WIDTH - 100
+        y_offset = 50
         for row in range(len(self.next_piece.shape)):
             for col in range(len(self.next_piece.shape[row])):
                 if self.next_piece.shape[row][col]:
@@ -127,7 +128,7 @@ class Tetris:
                 if self.current_piece.shape[row][col]:
                     x = self.current_piece.x + col
                     y = self.current_piece.y + row
-                    if 0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH:  # Bounds check
+                    if y >= 0 and y < GRID_HEIGHT and x >= 0 and x < GRID_WIDTH:
                         self.grid[y][x] = self.current_piece.color
 
         self.clear_lines()
@@ -149,8 +150,6 @@ class Tetris:
             self.score += 100
 
     def get_state(self):
-        # Feature engineering for the state representation
-        # You can add more features here (e.g., number of holes, etc.)
         heights = [0] * GRID_WIDTH
         for col in range(GRID_WIDTH):
             for row in range(GRID_HEIGHT):
@@ -159,13 +158,13 @@ class Tetris:
                     break
         return np.array(heights)
 
-    def run(self):
-        while not self.game_over:
+    def run(self, max_moves=MAX_MOVES_PER_AGENT):
+        while not self.game_over and self.move_count < max_moves:
+            self.move_count += 1
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.game_over = True
 
-            # Handle user input (for testing purposes)
             keys = pygame.key.get_pressed()
             if keys[pygame.K_LEFT] and not self.check_collision(
                     self.current_piece, x_offset=-1):
@@ -179,20 +178,18 @@ class Tetris:
             if keys[pygame.K_UP]:
                 self.current_piece.rotate()
 
-            # Game logic
             if not self.check_collision(self.current_piece, y_offset=1):
                 self.current_piece.move_down()
             else:
                 self.lock_piece()
 
-            # Drawing
             self.screen.fill(BLACK)
             self.draw_grid()
             self.current_piece.draw(self.screen)
             self.draw_next_piece()
 
             pygame.display.flip()
-            self.clock.tick(5)  # Adjust speed here
+            self.clock.tick(10)  # Increased speed to 10 FPS
 
         pygame.quit()
 
@@ -202,16 +199,15 @@ class Tetris:
 class Agent:
     def __init__(self, chromosome=None):
         if chromosome is None:
-            # Initialize with random weights
             self.chromosome = np.random.rand(GRID_WIDTH)
         else:
             self.chromosome = chromosome
+        self.fitness = 0  # Initialize fitness attribute
 
     def get_move(self, game):
-        # Simple example: choose the move that minimizes the aggregate height
         best_move = None
         min_height = float('inf')
-        for _ in range(4):  # Try all 4 rotations
+        for _ in range(4):
             for x in range(GRID_WIDTH - len(game.current_piece.shape[0]) + 1):
                 temp_piece = Tetromino(x, game.current_piece.y,
                                        game.current_piece.shape,
@@ -235,8 +231,7 @@ def create_initial_population():
 
 
 def selection(population):
-    # Simple tournament selection
-    tournament_size = 3
+    tournament_size = 2  # Reduced tournament size
     selected = []
     for _ in range(POPULATION_SIZE):
         tournament = random.sample(population, tournament_size)
@@ -246,7 +241,6 @@ def selection(population):
 
 
 def crossover(parent1, parent2):
-    # Single-point crossover
     crossover_point = random.randint(0, len(parent1.chromosome) - 1)
     child_chromosome = np.concatenate((parent1.chromosome[:crossover_point],
                                        parent2.chromosome[crossover_point:]))
@@ -254,7 +248,6 @@ def crossover(parent1, parent2):
 
 
 def mutation(agent):
-    # Randomly flip bits with a certain probability
     for i in range(len(agent.chromosome)):
         if random.random() < MUTATION_RATE:
             agent.chromosome[i] = 1 - agent.chromosome[i]
@@ -263,41 +256,19 @@ def mutation(agent):
 
 def calculate_fitness(agent):
     game = Tetris()
-    while not game.game_over:
-        move = agent.get_move(game)
-        if move is not None:
-            rotation, x = move
-
-            # Perform piece rotations
-            current_rotation = game.current_piece.rotation
-            while current_rotation != rotation:
-                game.current_piece.rotate()
-                current_rotation = (current_rotation + 1) % len(
-                    game.current_piece.shape)
-
-            # Correct horizontal positioning (should be in grid units, not pixels)
-            game.current_piece.x = x * BLOCK_SIZE
-
-            while not game.check_collision(game.current_piece, y_offset=1):
-                game.current_piece.move_down()
-            game.lock_piece()
-        else:
-            # if no valid moves are available, end the game
-            game.game_over = True
+    move = agent.get_move(game)
+    game.run(max_moves=MAX_MOVES_PER_AGENT)  # Limit the number of moves
     return game.score
 
 
 def run_genetic_algorithm():
     population = create_initial_population()
     for generation in range(NUM_GENERATIONS):
-        # Evaluate fitness
         for agent in population:
             agent.fitness = calculate_fitness(agent)
 
-        # Selection
         selected = selection(population)
 
-        # Crossover and mutation
         offspring = []
         for i in range(0, POPULATION_SIZE, 2):
             parent1 = selected[i]
@@ -307,10 +278,8 @@ def run_genetic_algorithm():
             offspring.append(mutation(child1))
             offspring.append(mutation(child2))
 
-        # Replace the old population
         population = offspring
 
-        # Print best agent's fitness
         best_agent = max(population, key=lambda agent: agent.fitness)
         print(f"Generation {generation}: Best fitness = {best_agent.fitness}")
 
@@ -318,10 +287,6 @@ def run_genetic_algorithm():
 
 
 if __name__ == "__main__":
-    # Uncomment to run the Tetris game manually
-    # game = Tetris()
-    # game.run()
-
-    # Uncomment to run the genetic algorithm
+    # Run the genetic algorithm
     best_agent = run_genetic_algorithm()
     print("Best agent's chromosome:", best_agent.chromosome)
